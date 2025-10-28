@@ -1,171 +1,37 @@
-(ansible_venv) mbshop@macbook-pro-de-RAMSSES-TINING ansible-idrac-collect % ansible-playbook -i inventory/hosts.ini playbook.yml -e "simulate=true"
+---
+- name: Gather CPU, Memory, and Disk data from Dell iDRAC
+  hosts: all
+  gather_facts: no
+  collections:
+    - dellemc.openmanage
+  vars:
+    output_dir: "/var/ansible/facts/idrac_facts"
+  tasks:
+    - name: Ensure output directory exists
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: '0755'
 
+    - name: Get system inventory from iDRAC
+      dellemc.openmanage.idrac_system_info:
+        idrac_ip: "{{ ansible_host }}"
+        idrac_user: "{{ idrac_user }}"
+        idrac_password: "{{ idrac_password }}"
+        validate_certs: false
+      register: idrac_info
 
-PLAY [Collecte iDRAC CPU/MEM/DISK (simulée ou réelle)] *********************************************
+    - name: Extract and format hardware data
+      ansible.builtin.set_fact:
+        system_data:
+          hostname: "{{ inventory_hostname }}"
+          cpu_cores: "{{ idrac_info.system_info.Processors.TotalNumberOfCores | default(0) }}"
+          memory_gb: "{{ (idrac_info.system_info.Memory.TotalSystemMemoryGiB | float) | round(2) }}"
+          disk_gb: >-
+            {{ idrac_info.system_info.Storage | map(attribute='CapacityGiB') | list | sum | round(2) }}
 
-TASK [dell_idrac_collect : Définir mode simulation si non fourni] **********************************
-ok: [amer_host]
-ok: [apac_host]
-ok: [emea_host]
-
-TASK [dell_idrac_collect : Inclure tâches de simulation si simulate=true] **************************
-included: /Users/mbshop/ansible-idrac-collect/roles/dell_idrac_collect/tasks/fetch_mock.yml for amer_host, apac_host, emea_host
-
-TASK [dell_idrac_collect : Charger le JSON mock (fichier local)] ***********************************
-[WARNING]: Host 'apac_host' is using the discovered Python interpreter at '/Users/mbshop/ansible_venv/bin/python3.13', but future installation of another Python interpreter could cause a different interpreter to be discovered. See https://docs.ansible.com/ansible-core/2.19/reference_appendices/interpreter_discovery.html for more information.
-ok: [apac_host]
-[WARNING]: Host 'emea_host' is using the discovered Python interpreter at '/Users/mbshop/ansible_venv/bin/python3.13', but future installation of another Python interpreter could cause a different interpreter to be discovered. See https://docs.ansible.com/ansible-core/2.19/reference_appendices/interpreter_discovery.html for more information.
-ok: [emea_host]
-[WARNING]: Host 'amer_host' is using the discovered Python interpreter at '/Users/mbshop/ansible_venv/bin/python3.13', but future installation of another Python interpreter could cause a different interpreter to be discovered. See https://docs.ansible.com/ansible-core/2.19/reference_appendices/interpreter_discovery.html for more information.
-ok: [amer_host]
-
-TASK [dell_idrac_collect : Décoder et parser le JSON mock] *****************************************
-ok: [amer_host]
-ok: [apac_host]
-ok: [emea_host]
-
-TASK [dell_idrac_collect : Extraire valeurs brutes] ************************************************
-ok: [amer_host]
-ok: [apac_host]
-ok: [emea_host]
-
-TASK [dell_idrac_collect : Calculer mémoire en GiB (1024^3) avec 2 décimales] **********************
-ok: [amer_host]
-ok: [apac_host]
-ok: [emea_host]
-
-TASK [dell_idrac_collect : Calculer capacité disque totale en bytes] *******************************
-ok: [amer_host]
-ok: [apac_host]
-ok: [emea_host]
-
-TASK [dell_idrac_collect : Calculer disque total en GiB (1024^3)] **********************************
-ok: [amer_host]
-ok: [apac_host]
-ok: [emea_host]
-
-TASK [dell_idrac_collect : Construire résultat formaté] ********************************************
-ok: [amer_host]
-ok: [apac_host]
-ok: [emea_host]
-
-TASK [dell_idrac_collect : Afficher résultat pour vérification] ************************************
-ok: [amer_host] => {
-    "idrac_result": {
-        "cpu_cores": 8,
-        "disk_gb": 750.0,
-        "host": "amer_host",
-        "memory_gb": 16.0,
-        "raw": {
-            "System": {
-                "Memory": {
-                    "TotalSystemMemoryBytes": 17179869184
-                },
-                "Processors": [
-                    {
-                        "Model": "Intel Xeon",
-                        "TotalCores": 8,
-                        "TotalThreads": 16
-                    }
-                ],
-                "Storage": {
-                    "Drives": [
-                        {
-                            "CapacityBytes": 536870912000,
-                            "Name": "sda"
-                        },
-                        {
-                            "CapacityBytes": 268435456000,
-                            "Name": "sdb"
-                        }
-                    ]
-                }
-            }
-        }
-    }
-}
-ok: [apac_host] => {
-    "idrac_result": {
-        "cpu_cores": 8,
-        "disk_gb": 750.0,
-        "host": "apac_host",
-        "memory_gb": 16.0,
-        "raw": {
-            "System": {
-                "Memory": {
-                    "TotalSystemMemoryBytes": 17179869184
-                },
-                "Processors": [
-                    {
-                        "Model": "Intel Xeon",
-                        "TotalCores": 8,
-                        "TotalThreads": 16
-                    }
-                ],
-                "Storage": {
-                    "Drives": [
-                        {
-                            "CapacityBytes": 536870912000,
-                            "Name": "sda"
-                        },
-                        {
-                            "CapacityBytes": 268435456000,
-                            "Name": "sdb"
-                        }
-                    ]
-                }
-            }
-        }
-    }
-}
-ok: [emea_host] => {
-    "idrac_result": {
-        "cpu_cores": 8,
-        "disk_gb": 750.0,
-        "host": "emea_host",
-        "memory_gb": 16.0,
-        "raw": {
-            "System": {
-                "Memory": {
-                    "TotalSystemMemoryBytes": 17179869184
-                },
-                "Processors": [
-                    {
-                        "Model": "Intel Xeon",
-                        "TotalCores": 8,
-                        "TotalThreads": 16
-                    }
-                ],
-                "Storage": {
-                    "Drives": [
-                        {
-                            "CapacityBytes": 536870912000,
-                            "Name": "sda"
-                        },
-                        {
-                            "CapacityBytes": 268435456000,
-                            "Name": "sdb"
-                        }
-                    ]
-                }
-            }
-        }
-    }
-}
-
-TASK [dell_idrac_collect : Sauvegarder résultat JSON local pour ce host] ***************************
-ok: [apac_host]
-ok: [emea_host]
-ok: [amer_host]
-
-TASK [dell_idrac_collect : Inclure tâches Redfish (réel) si simulate=false] ************************
-skipping: [amer_host]
-skipping: [apac_host]
-skipping: [emea_host]
-
-PLAY RECAP *****************************************************************************************
-amer_host                  : ok=11   changed=0    unreachable=0    failed=0    skipped=1    rescued=0    ignored=0   
-apac_host                  : ok=11   changed=0    unreachable=0    failed=0    skipped=1    rescued=0    ignored=0   
-emea_host                  : ok=11   changed=0    unreachable=0    failed=0    skipped=1    rescued=0    ignored=0   
-
-
+    - name: Save system data to JSON
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ inventory_hostname }}.json"
+        content: "{{ system_data | to_nice_json }}"
+        mode: '0644'
