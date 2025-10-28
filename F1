@@ -1,12 +1,10 @@
 ---
 - name: Gather CPU, Memory, and Disk data from Dell iDRAC
   hosts: all
-  connection: local
-  gather_facts: no
-  collections:
-    - dellemc.openmanage
+  gather_facts: false
+
   vars:
-    output_dir: "/var/ansible/facts/idrac_facts"
+    output_dir: "/tmp/idrac_data"
 
   tasks:
     - name: Ensure output directory exists
@@ -17,12 +15,33 @@
 
     - name: Get system inventory from iDRAC
       dellemc.openmanage.idrac_system_info:
-        idrac_ip: "{{ ansible_host }}"
+        idrac_ip: "{{ inventory_hostname }}"
         idrac_user: "{{ idrac_user }}"
         idrac_password: "{{ idrac_password }}"
         validate_certs: false
       register: idrac_info
 
-    - name: Debug iDRAC info structure
-      ansible.builtin.debug:
-        var: idrac_info
+    - name: Parse CPU, Memory, and Disk data
+      set_fact:
+        cpu_count: "{{ idrac_info.system_info.CPU | length }}"
+        memory_gb: "{{ (idrac_info.system_info.Memory[0].Size | int / 1024) | round(2) if idrac_info.system_info.Memory is defined else 0 }}"
+        disks_gb: "{{ idrac_info.system_info.PhysicalDisks | map(attribute='SizeInBytes') | map('int') | sum / (1024 ** 3) | round(2) if idrac_info.system_info.PhysicalDisks is defined else 0 }}"
+
+    - name: Save formatted data to file
+      copy:
+        dest: "{{ output_dir }}/{{ inventory_hostname }}.json"
+        content: |
+          {
+            "host": "{{ inventory_hostname }}",
+            "cpu_cores": {{ cpu_count }},
+            "memory_gb": {{ memory_gb }},
+            "disks_gb_total": {{ disks_gb }}
+          }
+
+    - name: Display summary
+      debug:
+        msg:
+          - "Host: {{ inventory_hostname }}"
+          - "CPU Cores: {{ cpu_count }}"
+          - "Memory (GB): {{ memory_gb }}"
+          - "Disk Total (GB): {{ disks_gb }}"
