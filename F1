@@ -1,11 +1,13 @@
 ---
 - name: Gather CPU, Memory, and Disk data from Dell iDRAC
   hosts: all
+  connection: local
   gather_facts: no
   collections:
     - dellemc.openmanage
   vars:
     output_dir: "/var/ansible/facts/idrac_facts"
+
   tasks:
     - name: Ensure output directory exists
       ansible.builtin.file:
@@ -25,10 +27,9 @@
       ansible.builtin.set_fact:
         system_data:
           hostname: "{{ inventory_hostname }}"
-          cpu_cores: "{{ idrac_info.system_info.Processors.TotalNumberOfCores | default(0) }}"
-          memory_gb: "{{ (idrac_info.system_info.Memory.TotalSystemMemoryGiB | float) | round(2) }}"
-          disk_gb: >-
-            {{ idrac_info.system_info.Storage | map(attribute='CapacityGiB') | list | sum | round(2) }}
+          cpu_cores: "{{ idrac_info.system_info.Processors | map(attribute='TotalNumberOfCores') | list | sum | default(0) }}"
+          memory_gb: "{{ idrac_info.system_info.Memory | map(attribute='SizeMB') | list | sum | float / 1024 | round(2) }}"
+          disk_gb: "{{ idrac_info.system_info.Storage | map(attribute='CapacityGiB') | list | sum | round(2) }}"
 
     - name: Save system data to JSON
       ansible.builtin.copy:
