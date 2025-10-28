@@ -1,5 +1,5 @@
 ---
-- name: Gather CPU, Memory, and Disk data from Dell iDRAC
+- name: Gather CPU, Memory, and Disk data from Dell iDRAC (with power management)
   hosts: all
   gather_facts: false
 
@@ -13,6 +13,36 @@
         state: directory
         mode: '0755'
 
+    - name: Check current power state
+      dellemc.openmanage.idrac_redfish_info:
+        idrac_ip: "{{ inventory_hostname }}"
+        idrac_user: "{{ idrac_user }}"
+        idrac_password: "{{ idrac_password }}"
+        category: Systems
+        command: GetPowerState
+        validate_certs: false
+      register: power_state
+
+    - name: Display power state
+      debug:
+        msg: "Current power state of {{ inventory_hostname }}: {{ power_state.redfish_facts.power_state }}"
+
+    - name: Power on the system if it's off
+      when: power_state.redfish_facts.power_state != "On"
+      dellemc.openmanage.idrac_redfish_command:
+        idrac_ip: "{{ inventory_hostname }}"
+        idrac_user: "{{ idrac_user }}"
+        idrac_password: "{{ idrac_password }}"
+        category: Systems
+        command: PowerOn
+        validate_certs: false
+
+    - name: Wait for system to boot to BIOS readiness
+      when: power_state.redfish_facts.power_state != "On"
+      ansible.builtin.pause:
+        minutes: 3
+      # (selon les serveurs, on peut augmenter à 5 min si BIOS lent)
+
     - name: Get system inventory from iDRAC
       dellemc.openmanage.idrac_system_info:
         idrac_ip: "{{ inventory_hostname }}"
@@ -21,11 +51,26 @@
         validate_certs: false
       register: idrac_info
 
-    - name: Parse CPU, Memory, and Disk data
+    - name: Extract and format CPU, Memory, and Disk data
       set_fact:
         cpu_count: "{{ idrac_info.system_info.CPU | length }}"
-        memory_gb: "{{ (idrac_info.system_info.Memory[0].Size | int / 1024) | round(2) if idrac_info.system_info.Memory is defined else 0 }}"
-        disks_gb: "{{ idrac_info.system_info.PhysicalDisks | map(attribute='SizeInBytes') | map('int') | sum / (1024 ** 3) | round(2) if idrac_info.system_info.PhysicalDisks is defined else 0 }}"
+        memory_gb: >-
+          {{
+            (idrac_info.system_info.Memory[0].Size | int / 1024)
+            | round(2)
+            if (idrac_info.system_info.Memory is defined and idrac_info.system_info.Memory|length > 0)
+            else 0
+          }}
+        disks_gb: >-
+          {{
+            (idrac_info.system_info.PhysicalDisks
+            | map(attribute='SizeInBytes')
+            | map('int')
+            | sum / (1024 ** 3))
+            | round(2)
+            if (idrac_info.system_info.PhysicalDisks is defined and idrac_info.system_info.PhysicalDisks|length > 0)
+            else 0
+          }}
 
     - name: Save formatted data to file
       copy:
@@ -38,10 +83,11 @@
             "disks_gb_total": {{ disks_gb }}
           }
 
-    - name: Display summary
+    - name: Display final summary
       debug:
         msg:
           - "Host: {{ inventory_hostname }}"
+          - "Power State: {{ power_state.redfish_facts.power_state }}"
           - "CPU Cores: {{ cpu_count }}"
           - "Memory (GB): {{ memory_gb }}"
           - "Disk Total (GB): {{ disks_gb }}"
