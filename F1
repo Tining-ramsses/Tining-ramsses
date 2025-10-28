@@ -21,29 +21,8 @@
         idrac_user: "{{ idrac_user }}"
         idrac_password: "{{ idrac_password }}"
         validate_certs: false
-        get_system_info:
-          - system
-          - processor
-          - memory
-          - storage
       register: idrac_info
 
     - name: Debug iDRAC info structure
       ansible.builtin.debug:
         var: idrac_info
-
-    - name: Extract and format hardware data
-      ansible.builtin.set_fact:
-        system_data:
-          hostname: "{{ inventory_hostname }}"
-          cpu_cores: "{{ idrac_info.system_info.Processor | map(attribute='TotalCores') | list | sum | default(0) }}"
-          memory_gb: "{{ idrac_info.system_info.Memory | map(attribute='SizeMB') | list | sum | float / 1024 | round(2) }}"
-          disk_gb: "{{ idrac_info.system_info.Storage | map(attribute='CapacityGiB') | list | sum | round(2) }}"
-      when: idrac_info.system_info is defined
-
-    - name: Save system data to JSON
-      ansible.builtin.copy:
-        dest: "{{ output_dir }}/{{ inventory_hostname }}.json"
-        content: "{{ system_data | to_nice_json }}"
-        mode: '0644'
-      when: system_data is defined
