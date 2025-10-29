@@ -1,5 +1,5 @@
 ---
-- name: Gather CPU, Memory, and Disk data from Dell iDRAC using Redfish
+- name: Gather CPU, Memory, and Disk data from Dell iDRAC (via Redfish)
   hosts: all
   gather_facts: false
 
@@ -7,23 +7,49 @@
     output_dir: "/tmp/idrac_data"
 
   tasks:
+
     - name: Ensure output directory exists
       ansible.builtin.file:
         path: "{{ output_dir }}"
         state: directory
         mode: '0755'
 
+    - name: Check current power state
+      dellemc.openmanage.idrac_redfish_info:
+        idrac_ip: "{{ inventory_hostname }}"
+        idrac_user: "{{ idrac_user }}"
+        idrac_password: "{{ idrac_password }}"
+        category: Systems
+        command: GetPowerState
+        validate_certs: false
+      register: power_status
+
+    - name: Power on the server if it is off
+      when: power_status.power_state == "Off"
+      dellemc.openmanage.idrac_redfish_command:
+        idrac_ip: "{{ inventory_hostname }}"
+        idrac_user: "{{ idrac_user }}"
+        idrac_password: "{{ idrac_password }}"
+        category: Systems
+        command: PowerOn
+        validate_certs: false
+
+    - name: Wait for system to become ready after power on
+      when: power_status.power_state == "Off"
+      ansible.builtin.pause:
+        seconds: 90
+
     - name: Get detailed system info from iDRAC via Redfish
-      dellemc.openmanage.redfish_info:
-        baseuri: "{{ inventory_hostname }}"
-        username: "{{ idrac_user }}"
-        password: "{{ idrac_password }}"
+      dellemc.openmanage.idrac_redfish_info:
+        idrac_ip: "{{ inventory_hostname }}"
+        idrac_user: "{{ idrac_user }}"
+        idrac_password: "{{ idrac_password }}"
         category: Systems
         command: GetSystemInventory
         validate_certs: false
       register: redfish_info
 
-    - name: Show raw Redfish info (for debugging only)
+    - name: Show full Redfish data structure (for debug only)
       debug:
         var: redfish_info
       when: debug | default(false)
@@ -31,21 +57,20 @@
     - name: Parse CPU, Memory, and Disk data
       set_fact:
         cpu_count: "{{ redfish_info.systems[0].ProcessorSummary.Count | default(0) }}"
-        memory_gb: "{{ redfish_info.systems[0].MemorySummary.TotalSystemMemoryGiB | default(0.0) | float }}"
+        memory_gb: "{{ redfish_info.systems[0].MemorySummary.TotalSystemMemoryGiB | default(0.0) }}"
         disks_gb: >-
           {{
-            (
-              redfish_info.systems[0].Storage[0].Drives
-              | map(attribute='CapacityBytes')
-              | map('int')
-              | sum / (1024 ** 3)
-            ) | round(2)
-            if redfish_info.systems[0].Storage is defined and redfish_info.systems[0].Storage[0].Drives is defined
-            else 0
+            redfish_info.systems[0].Storage | map(attribute='Drives')
+            | flatten
+            | map(attribute='CapacityBytes')
+            | map('int')
+            | sum / (1024**3)
+            | round(2)
+            if redfish_info.systems[0].Storage is defined else 0
           }}
 
     - name: Save formatted data to file
-      ansible.builtin.copy:
+      copy:
         dest: "{{ output_dir }}/{{ inventory_hostname }}.json"
         content: |
           {
@@ -56,7 +81,7 @@
           }
 
     - name: Display summary
-      ansible.builtin.debug:
+      debug:
         msg:
           - "Host: {{ inventory_hostname }}"
           - "CPU Cores: {{ cpu_count }}"
