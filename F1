@@ -21,15 +21,15 @@
         baseuri: "{{ inventory_hostname }}"
         username: "{{ idrac_user }}"
         password: "{{ idrac_password }}"
-        validate_certs: false
       register: redfish_info
+      ignore_errors: true
 
-    - name: Debug full data (optional)
+    - name: Show Redfish data (debug)
       debug:
         var: redfish_info
       when: debug | default(false)
 
-    - name: Extract CPU, Memory and Disk data
+    - name: Parse CPU, Memory, and Disk data (safe mode)
       set_fact:
         cpu_count: "{{ redfish_info.redfish_facts.system.entries[0].ProcessorSummary.Count | default(0) }}"
         memory_gb: "{{ redfish_info.redfish_facts.system.entries[0].MemorySummary.TotalSystemMemoryGiB | default(0.0) }}"
@@ -43,22 +43,23 @@
             | round(2)
             if redfish_info.redfish_facts.system.entries[0].Storage is defined else 0
           }}
+      when: not redfish_info.failed | default(false)
 
-    - name: Save formatted data to JSON
+    - name: Save formatted data to file
       copy:
         dest: "{{ output_dir }}/{{ inventory_hostname }}.json"
         content: |
           {
             "host": "{{ inventory_hostname }}",
-            "cpu_cores": {{ cpu_count }},
-            "memory_gb": {{ memory_gb }},
-            "disks_gb_total": {{ disks_gb }}
+            "cpu_cores": {{ cpu_count | default(0) }},
+            "memory_gb": {{ memory_gb | default(0.0) }},
+            "disks_gb_total": {{ disks_gb | default(0.0) }}
           }
 
     - name: Display summary
       debug:
         msg:
           - "Host: {{ inventory_hostname }}"
-          - "CPU cores: {{ cpu_count }}"
-          - "Memory (GB): {{ memory_gb }}"
-          - "Disk total (GB): {{ disks_gb }}"
+          - "CPU cores: {{ cpu_count | default(0) }}"
+          - "Memory (GB): {{ memory_gb | default(0.0) }}"
+          - "Disk total (GB): {{ disks_gb | default(0.0) }}"
