@@ -1,5 +1,5 @@
 ---
-- name: Gather CPU, Memory, and Disk data from Dell iDRAC (via Redfish)
+- name: Gather CPU, Memory, and Disk data from Dell iDRAC (via Redfish API)
   hosts: all
   gather_facts: false
 
@@ -14,62 +14,37 @@
         state: directory
         mode: '0755'
 
-    - name: Check current power state
-      dellemc.openmanage.idrac_redfish_info:
-        idrac_ip: "{{ inventory_hostname }}"
-        idrac_user: "{{ idrac_user }}"
-        idrac_password: "{{ idrac_password }}"
+    - name: Get full Redfish system info
+      community.general.redfish_info:
         category: Systems
-        command: GetPowerState
-        validate_certs: false
-      register: power_status
-
-    - name: Power on the server if it is off
-      when: power_status.power_state == "Off"
-      dellemc.openmanage.idrac_redfish_command:
-        idrac_ip: "{{ inventory_hostname }}"
-        idrac_user: "{{ idrac_user }}"
-        idrac_password: "{{ idrac_password }}"
-        category: Systems
-        command: PowerOn
-        validate_certs: false
-
-    - name: Wait for system to become ready after power on
-      when: power_status.power_state == "Off"
-      ansible.builtin.pause:
-        seconds: 90
-
-    - name: Get detailed system info from iDRAC via Redfish
-      dellemc.openmanage.idrac_redfish_info:
-        idrac_ip: "{{ inventory_hostname }}"
-        idrac_user: "{{ idrac_user }}"
-        idrac_password: "{{ idrac_password }}"
-        category: Systems
-        command: GetSystemInventory
+        command: GetSystem
+        baseuri: "{{ inventory_hostname }}"
+        username: "{{ idrac_user }}"
+        password: "{{ idrac_password }}"
         validate_certs: false
       register: redfish_info
 
-    - name: Show full Redfish data structure (for debug only)
+    - name: Debug full data (optional)
       debug:
         var: redfish_info
       when: debug | default(false)
 
-    - name: Parse CPU, Memory, and Disk data
+    - name: Extract CPU, Memory and Disk data
       set_fact:
-        cpu_count: "{{ redfish_info.systems[0].ProcessorSummary.Count | default(0) }}"
-        memory_gb: "{{ redfish_info.systems[0].MemorySummary.TotalSystemMemoryGiB | default(0.0) }}"
+        cpu_count: "{{ redfish_info.redfish_facts.system.entries[0].ProcessorSummary.Count | default(0) }}"
+        memory_gb: "{{ redfish_info.redfish_facts.system.entries[0].MemorySummary.TotalSystemMemoryGiB | default(0.0) }}"
         disks_gb: >-
           {{
-            redfish_info.systems[0].Storage | map(attribute='Drives')
+            redfish_info.redfish_facts.system.entries[0].Storage | map(attribute='Drives')
             | flatten
             | map(attribute='CapacityBytes')
             | map('int')
             | sum / (1024**3)
             | round(2)
-            if redfish_info.systems[0].Storage is defined else 0
+            if redfish_info.redfish_facts.system.entries[0].Storage is defined else 0
           }}
 
-    - name: Save formatted data to file
+    - name: Save formatted data to JSON
       copy:
         dest: "{{ output_dir }}/{{ inventory_hostname }}.json"
         content: |
@@ -84,6 +59,6 @@
       debug:
         msg:
           - "Host: {{ inventory_hostname }}"
-          - "CPU Cores: {{ cpu_count }}"
+          - "CPU cores: {{ cpu_count }}"
           - "Memory (GB): {{ memory_gb }}"
-          - "Disk Total (GB): {{ disks_gb }}"
+          - "Disk total (GB): {{ disks_gb }}"
