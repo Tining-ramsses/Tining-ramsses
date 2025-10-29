@@ -1,11 +1,10 @@
 ---
-- name: Gather CPU, Memory, and Disk data from Dell iDRAC
+- name: Gather CPU, Memory, and Disk data from Dell iDRAC using Redfish
   hosts: all
   gather_facts: false
 
   vars:
     output_dir: "/tmp/idrac_data"
-    boot_wait: 180  # délai d'attente après power on (en secondes)
 
   tasks:
     - name: Ensure output directory exists
@@ -14,119 +13,39 @@
         state: directory
         mode: '0755'
 
-    # 1️⃣ Vérifier l'état actuel (on/off)
-    - name: Check current power state
+    - name: Get detailed system info from iDRAC via Redfish
       dellemc.openmanage.redfish_info:
-        idrac_ip: "{{ inventory_hostname }}"
-        idrac_user: "{{ idrac_user }}"
-        idrac_password: "{{ idrac_password }}"
+        baseuri: "{{ inventory_hostname }}"
+        username: "{{ idrac_user }}"
+        password: "{{ idrac_password }}"
         category: Systems
-        command: GetPowerState
+        command: GetSystemInventory
         validate_certs: false
-      register: power_status
+      register: redfish_info
 
-    - name: Display power state
-      ansible.builtin.debug:
-        msg: "Power state for {{ inventory_hostname }}: {{ power_status.redfish_facts.Systems.PowerState }}"
-
-    # 2️⃣ Allumer le serveur s'il est éteint
-    - name: Power on server if off
-      dellemc.openmanage.redfish_command:
-        idrac_ip: "{{ inventory_hostname }}"
-        idrac_user: "{{ idrac_user }}"
-        idrac_password: "{{ idrac_password }}"
-        category: Systems
-        command: PowerOn
-        validate_certs: false
-      when: power_status.redfish_facts.Systems.PowerState == "Off"
-
-    # 3️⃣ Attendre que le serveur démarre complètement
-    - name: Wait for POST to complete
-      ansible.builtin.pause:
-        seconds: "{{ boot_wait }}"
-      when: power_status.redfish_facts.Systems.PowerState == "Off"
-
-    # 4️⃣ Récupérer les infos hardware
-    - name: Get iDRAC hardware inventory
-      dellemc.openmanage.idrac_system_info:
-        idrac_ip: "{{ inventory_hostname }}"
-        idrac_user: "{{ idrac_user }}"
-        idrac_password: "{{ idrac_password }}"
-        validate_certs: false
-      register: idrac_info
-
-    # 5️⃣ Extraire les infos CPU, Mémoire, Disque
-    - name: Parse CPU / Memory / Disk data
-      ansible.builtin.set_fact:
-        cpu_count: "{{ idrac_info.system_info.CPU | length if idrac_info.system_info.CPU is defined else 0 }}"
-        memory_gb: >-
-          {% if idrac_info.system_info.Memory is defined and idrac_info.system_info.Memory|length > 0 %}
-          {{ (idrac_info.system_info.Memory | map(attribute='Size') | map('int') | sum / 1024) | round(2) }}
-          {% else %}
-          0
-          {% endif %}
-        disks_gb: >-
-          {% if idrac_info.system_info.PhysicalDisks is defined and idrac_info.system_info.PhysicalDisks|length > 0 %}
-          {{ (idrac_info.system_info.PhysicalDisks | map(attribute='SizeInBytes') | map('int') | sum / (1024**3)) | round(2) }}
-          {% else %}
-          0
-          {% endif %}
-
-    # 6️⃣ Sauvegarder les données dans un fichier JSON
-    - name: Save data to JSON file
-      ansible.builtin.copy:
-        dest: "{{ output_dir }}/{{ inventory_hostname }}.json"
-        content: |
-          {
-            "host": "{{ inventory_hostname }}",
-            "cpu_cores": {{ cpu_count }},
-            "memory_gb": {{ memory_gb }},
-            "disk_total_gb": {{ disks_gb }}
-          }
-
-    # 7️⃣ Résumé clair dans la sortie
-    - name: Display summary
-      ansible.builtin.debug:
-        msg:
-          - "Host: {{ inventory_hostname }}"
-          - "CPU cores: {{ cpu_count }}"
-          - "Memory (GB): {{ memory_gb }}"
-          - "Disk total (GB): {{ disks_gb }}"
-
-
-
-
----
-- name: Gather CPU, Memory, and Disk data from Dell iDRAC
-  hosts: all
-  gather_facts: false
-
-  vars:
-    output_dir: "/tmp/idrac_data"
-
-  tasks:
-    - name: Ensure output directory exists
-      ansible.builtin.file:
-        path: "{{ output_dir }}"
-        state: directory
-        mode: '0755'
-
-    - name: Get system inventory from iDRAC
-      dellemc.openmanage.idrac_system_info:
-        idrac_ip: "{{ inventory_hostname }}"
-        idrac_user: "{{ idrac_user }}"
-        idrac_password: "{{ idrac_password }}"
-        validate_certs: false
-      register: idrac_info
+    - name: Show raw Redfish info (for debugging only)
+      debug:
+        var: redfish_info
+      when: debug | default(false)
 
     - name: Parse CPU, Memory, and Disk data
       set_fact:
-        cpu_count: "{{ idrac_info.system_info.CPU | length }}"
-        memory_gb: "{{ (idrac_info.system_info.Memory[0].Size | int / 1024) | round(2) if idrac_info.system_info.Memory is defined else 0 }}"
-        disks_gb: "{{ idrac_info.system_info.PhysicalDisks | map(attribute='SizeInBytes') | map('int') | sum / (1024 ** 3) | round(2) if idrac_info.system_info.PhysicalDisks is defined else 0 }}"
+        cpu_count: "{{ redfish_info.systems[0].ProcessorSummary.Count | default(0) }}"
+        memory_gb: "{{ redfish_info.systems[0].MemorySummary.TotalSystemMemoryGiB | default(0.0) | float }}"
+        disks_gb: >-
+          {{
+            (
+              redfish_info.systems[0].Storage[0].Drives
+              | map(attribute='CapacityBytes')
+              | map('int')
+              | sum / (1024 ** 3)
+            ) | round(2)
+            if redfish_info.systems[0].Storage is defined and redfish_info.systems[0].Storage[0].Drives is defined
+            else 0
+          }}
 
     - name: Save formatted data to file
-      copy:
+      ansible.builtin.copy:
         dest: "{{ output_dir }}/{{ inventory_hostname }}.json"
         content: |
           {
@@ -137,10 +56,9 @@
           }
 
     - name: Display summary
-      debug:
+      ansible.builtin.debug:
         msg:
           - "Host: {{ inventory_hostname }}"
           - "CPU Cores: {{ cpu_count }}"
           - "Memory (GB): {{ memory_gb }}"
           - "Disk Total (GB): {{ disks_gb }}"
-
