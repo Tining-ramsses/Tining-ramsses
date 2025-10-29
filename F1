@@ -1,65 +1,45 @@
 ---
-- name: Gather CPU, Memory, and Disk data from Dell iDRAC (via Redfish API)
+- name: Gather full system info from Dell iDRAC via Redfish API
   hosts: all
-  gather_facts: false
-
+  gather_facts: no
   vars:
-    output_dir: "/tmp/idrac_data"
+    idrac_ip: "{{ inventory_hostname }}"
+    idrac_user: root
+    idrac_password: "VotreMotDePasse"
+    output_file: "/tmp/redfish_system_info.json"
 
   tasks:
-
-    - name: Ensure output directory exists
-      ansible.builtin.file:
-        path: "{{ output_dir }}"
-        state: directory
-        mode: '0755'
-
-    - name: Get full Redfish system info
+    - name: Get Redfish System resource
       community.general.redfish_info:
         category: Systems
         command: GetSystem
-        baseuri: "{{ inventory_hostname }}"
+        baseuri: "https://{{ idrac_ip }}"
         username: "{{ idrac_user }}"
         password: "{{ idrac_password }}"
-      register: redfish_info
-      ignore_errors: true
+        timeout: 30
+      register: system_info
 
-    - name: Show Redfish data (debug)
+    - name: Show system data (raw JSON)
       debug:
-        var: redfish_info
-      when: debug | default(false)
+        var: system_info.redfish_facts.System
 
-    - name: Parse CPU, Memory, and Disk data (safe mode)
+    - name: Extract summarized hardware info
       set_fact:
-        cpu_count: "{{ redfish_info.redfish_facts.system.entries[0].ProcessorSummary.Count | default(0) }}"
-        memory_gb: "{{ redfish_info.redfish_facts.system.entries[0].MemorySummary.TotalSystemMemoryGiB | default(0.0) }}"
-        disks_gb: >-
-          {{
-            redfish_info.redfish_facts.system.entries[0].Storage | map(attribute='Drives')
-            | flatten
-            | map(attribute='CapacityBytes')
-            | map('int')
-            | sum / (1024**3)
-            | round(2)
-            if redfish_info.redfish_facts.system.entries[0].Storage is defined else 0
-          }}
-      when: not redfish_info.failed | default(false)
+        hardware_summary:
+          Model: "{{ system_info.redfish_facts.System[0].Model | default('N/A') }}"
+          Manufacturer: "{{ system_info.redfish_facts.System[0].Manufacturer | default('N/A') }}"
+          SerialNumber: "{{ system_info.redfish_facts.System[0].SerialNumber | default('N/A') }}"
+          BIOSVersion: "{{ system_info.redfish_facts.System[0].BiosVersion | default('N/A') }}"
+          CPU_Model: "{{ system_info.redfish_facts.System[0].ProcessorSummary.Model | default('N/A') }}"
+          CPU_Count: "{{ system_info.redfish_facts.System[0].ProcessorSummary.Count | default('N/A') }}"
+          Memory_Installed_MB: "{{ system_info.redfish_facts.System[0].MemorySummary.TotalSystemMemoryGiB | float * 1024 | int }}"
+          PowerState: "{{ system_info.redfish_facts.System[0].PowerState | default('N/A') }}"
 
-    - name: Save formatted data to file
-      copy:
-        dest: "{{ output_dir }}/{{ inventory_hostname }}.json"
-        content: |
-          {
-            "host": "{{ inventory_hostname }}",
-            "cpu_cores": {{ cpu_count | default(0) }},
-            "memory_gb": {{ memory_gb | default(0.0) }},
-            "disks_gb_total": {{ disks_gb | default(0.0) }}
-          }
-
-    - name: Display summary
+    - name: Display summarized hardware info
       debug:
-        msg:
-          - "Host: {{ inventory_hostname }}"
-          - "CPU cores: {{ cpu_count | default(0) }}"
-          - "Memory (GB): {{ memory_gb | default(0.0) }}"
-          - "Disk total (GB): {{ disks_gb | default(0.0) }}"
+        var: hardware_summary
+
+    - name: Save full output to file
+      copy:
+        content: "{{ system_info | to_nice_json }}"
+        dest: "{{ output_file }}"
