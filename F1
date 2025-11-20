@@ -1,48 +1,11 @@
----
-- name: Gather hardware info from Dell iDRAC via Redfish API
-  hosts: all
-  gather_facts: false
+Oui — j’ai trouvé des références utiles montrant que le type « refroidissement liquide » est bien prévu dans les schémas Redfish, ce qui confirme que tes conditions de script sont sur la bonne voie :  utme schéma Redfish pour la *ressource CoolantConnector* affiche des propriétés comme `CoolantConnectorType`, `FlowLitersPerMinute`, `SupplyTemperatureCelsius`, `ReturnTemperatureCelsius`, etc.  utm  
+-utm guide d’alerte de Dell Technologies mentionne des messages d’événement pour le système de refroidissement liquide (ex : « The Liquid cooling pump … ») dans les serveurs PowerEdge qui supportent le refroidissement liquide. [2]   
+- Le schéma Redfish inclut également un attribut `Coolant` dans `CoolingLoop` qui précise le type de fluide (`CoolantType` = « Water » / « Dielectric », etc.). [3]   
 
-  vars:
-    output_dir: "/tmp/idrac_data"
-
-  tasks:
-    - name: Ensure output directory exists
-      ansible.builtin.file:
-        path: "{{ output_dir }}"
-        state: directory
-        mode: '0755'
-
-    - name: Get Redfish Chassis Inventory (CPU, Memory, Disks)
-      community.general.redfish_info:
-        category: Systems
-        command: GetChassisInventory
-        baseuri: "{{ inventory_hostname }}"
-        username: "{{ idrac_user }}"
-        password: "{{ idrac_password }}"
-      register: redfish_data
-
-    - name: Parse system data
-      set_fact:
-        cpu_count: "{{ redfish_data.redfish_info.Processors | length if redfish_data.redfish_info.Processors is defined else 0 }}"
-        memory_gb: "{{ (redfish_data.redfish_info.MemorySummary.TotalSystemMemoryGiB | default(0)) | int }}"
-        disks_gb: "{{ (redfish_data.redfish_info.Storage | map(attribute='Drives') | flatten | map(attribute='CapacityBytes') | map('int') | sum / (1024 ** 3)) | round(2) if redfish_data.redfish_info.Storage is defined else 0 }}"
-
-    - name: Save formatted data to file
-      ansible.builtin.copy:
-        dest: "{{ output_dir }}/{{ inventory_hostname }}.json"
-        content: |
-          {
-            "host": "{{ inventory_hostname }}",
-            "cpu_cores": {{ cpu_count }},
-            "memory_gb": {{ memory_gb }},
-            "disks_gb_total": {{ disks_gb }}
-          }
-
-    - name: Display summary
-      debug:
-        msg:
-          - "Host: {{ inventory_hostname }}"
-          - "CPU cores: {{ cpu_count }}"
-          - "Memory (GB): {{ memory_gb }}"
-          - "Disk total (GB): {{ disks_gb }}"
+✅ Conclusion pour ton script :
+- Condition à vérifier : présence d’un objet ou élément relié à « CoolantConnector », « CoolingLoop », ou « CoolantType » → indique refroidissement liquide.  
+- Sinon, s’il n’y a *que* des ventilateurs listés (`Fans`) et aucun élément `Coolant…`, on peut assumer *air‑cooling*.  
+- Assure‑toi d’utiliser l’endpoint correct (`/redfish/v1/Chassis/{id}/…` ou `/redfish/v1/ThermalEquipment/...`) selon serveur. Citations:
+1. DMTF: www.dmtf.org/sites/default/files/standards/documents/DSP2046_2025.2.html?utm_source=chatgpt.
+2. Dell: www.dell.com/support/manuals/en-us/dell-openmanage-enterprise/error_event_message_guide/lcsliquid-cooling-system-event-messages?guid=guid-19e70770-aac3-4d00-af68-88580952ad1b&utm
+3. Redfish: redfish.dmtf.org/schemas/DSP2046_2024.1.html?utm
