@@ -1,70 +1,65 @@
-Oui, tout à fait — *chez Dell, un serveur peut combiner refroidissement liquide ET ventilateurs*.
-
-Voici pourquoi :
-
-✅ 1. *Refroidissement hybride* (liquide + air)
-- Les *pompes à liquide (coolant pumps)*PowerEdge avec refroidissement liquide* (modèle, endpoint *ventilateurs (air cooling)* assurent le refroidissement du reste du châssis ou des composants secondaires.
-- Ce système est souvent utilisé pour des workloads très denses (ex : IA, HPC).
-
-✅ 2. *Sécurité & redondance*
-- Même avec refroidissement liquide, Dell laisse les ventilateurs actifs pour :
-  - gérer un *flux d’air secondaire*,
-  - assurer un *repli en cas de défaillance du circuit liquide*.
-
-✅ 3. *Exemple réel*
-- Le *Dell PowerEdge XE9680* (serveur IA haut de gamme) peut être équipé d’un kit de refroidissement liquide Dell + ventilateurs.
-- Sur iDRAC, tu verras donc des capteurs *LiquidCoolantSensor* + *fanRPM* ensemble.
+*Remarque* : Un utilisateur a indiqué que cette API ne renvoyait que la température d’entrée ambiante et *pas forcément toutes les sondes individuelles* (inlet/outlet distinctes) :  
+> « It only gives the inlet ambient temperature. » [4]
 
 ---
 
-🔎 Donc :
-Si tu détectes :
-- des éléments comme `CoolantPump`, `LiquidSensor`, `InletTemperature`, *et*
-- des ventilateurs actifs (ex : `fan1RPM`, `fan2RPM`),
+🔧 Conditions à vérifier dans votre script PowerShell  
+- Pour *CPU Temp* : filtrez les objets où `PhysicalContext` = `"CPU"` ou `Name` contient `"CPU"` → récupérer `ReadingCelsius`.  
+- Pour *Inlet Temp* : cherchez les sondes où `Name` ou `PhysicalContext` = `"Inlet"` ou `"Chassis Inlet"`.  
+- Si disponible, pour *Outlet / Return Temp* : filtrez pour `Name` ou `PhysicalContext` = `"Outlet"`, `"Return"` ou `"Exhaust"`.
 
-… c’est *normal* et cohérent avec une config hybride.
-
-Tu veux un exemple JSON iDRAC de ce genre de serveur hybride ?Montre des cas précis qui existe avec les endpoint comme tout à l’heureOui — j’ai trouvé des références précises montrant des endpoints Redfish (et schémas) pour des systèmes de refroidissement liquide, ce qui confirme que tu peux les utiliser dans un script pour detection. Voici les détails :
-
----
-
-✅ Exemples d’endpoints et champs pertinents
-
-1. Schéma « CoolantConnector » du standard Redfish :  
-   - URI type : `/redfish/v1/Chassis/{ChassisId}/ThermalSubsystem/CoolantConnectors/{CoolantConnectorId}` ou `/redfish/v1/ThermalEquipment/CDUs/{CoolingUnitId}/PrimaryCoolantConnectors/{CoolantConnectorId}`. [1]   
-   - Exemple de réponse JSON :  
-     ```json
-     {
-       "@odata.type": "#CoolantConnector.v1_0_2.CoolantConnector",
-       "Id": "A",
-       "Name": "Rack Cooling Loop A",
-       "SupplyTemperatureCelsius": { "Reading": 14.8 },
-       "ReturnTemperatureCelsius": { "Reading": 38.2 },
-       "CoolantConnectorType": "Pair",
-       ...
-     }
-     ```  
-     Ce type de champ indique un refroidissement liquide. [1]
-
-2. Documentation d’événements de refroidissement liquide chez Dell :  
-   - Par exemple, des messages d’événement « Liquid Cooling System … » (réf LCS0001, LCPF001, etc) qui montrent que Dell supporte un système de refroidissement liquide via iDRAC/Redfish. [2]Citations:
-1. Redfish: redfish.dmtf.org/schemas/v1/DSP2046_2024.1.html?utm_source=chatgpt.com
-2. Dell: www.dell.com/support/manuals/en-us/idrac9-lifecycle-controller-v7.x-series/eemi_automated_2024/lcsliquid-cooling-system-event-messages?guid=guid-2dc1ddd9-6d6d-4358-b59f-4adb288efe0b&lang=en-us&utm_source=chatgpt.com
-3. Redfish: redfish.dmtf.org/redfish/mockups/v1/1608?utm_source=chatgpt.com- Cela confirme que les serveurs Dell ont bien une gestion « liquide » identifiée.
-
-3. Exemple générique de pompe liquide (pump) via Redfish :  
-   - URIs comme `/redfish/v1/ThermalEquipment/CDUs/1/Pumps/1` avec `PumpType: "Liquid"`. [3]   
-   - Ceci est utile pour ton script : chercher un « PumpType = Liquid » pourrait être un indicateur.
+Exemple de pseudo‑script PowerShell  
+```powershell
+uri = "https://iDRAC_IP/redfish/v1/Chassis/System.Embedded.1/Sensors/Temperatures"
+response = Invoke-RestMethod -Uriuri -Credential cred -SkipCertificateCheck
+foreach(sensor in response.Members) 
+    if (sensor.PhysicalContext -eq "CPU") {
+        Write-Output "CPU Temp: (sensor.ReadingCelsius) °C"
+    }
+    elseif (sensor.Name -match "Inlet|Chassis Inlet") 
+        Write-Output "Inlet Temp:(sensor.ReadingCelsius) °C"
+    
+    elseif (sensor.Name -match "Outlet|Return|Exhaust") {
+        Write-Output "Outlet Temp: (sensor.ReadingCelsius) °C"
+    }
+}
+```Voici quelques *endpoints concrets* et utiles pour récupérer la *température CPU* ou la *température d’entrée (inlet)* sur des serveurs Dell ou HPE, avec les champs exacts tels que trouvés dans des documents ou forums. Vous pouvez les adapter à votre script PowerShell.
 
 ---
 
-🔍 En résumé : ce que ton script PowerShell/Redfish pourrait vérifier
+✅ Pour Dell iDRAC / Redfish  
+*Endpoint pour capteurs de température CPU* :  
+```
+GET /redfish/v1/Chassis/System.Embedded.1/Sensors/Temperatures/{SensorId}
+```
+Exemple de JSON trouvé :  
+```json
+{
+  "@odata.type": "#Thermal.v1_4_0.Temperature",
+  "Name": "CPU1 Temp",
+  "PhysicalContext": "CPU",
+  "ReadingCelsius": 58,
+  "RelatedItem": [
+    { "@odata.id": "/redfish/v1/Systems/System.Embedded.1/Processors/CPU.Socket.1" }
+  ]
+}
+```  [1]
 
-- Présence d’un endpoint `CoolantConnector` ou `CoolingLoop` avec `CoolantType` (ex : “Water”, “Dielectric”) → indique liquide.  
-- Présence d’un capteur `SupplyTemperatureCelsius` et `ReturnTemperatureCelsius` sous le même objet → typique du liquide.  
-- Présence d’un objet `Pump` avec `PumpType: "Liquid"` → encore plus clair.  
-- Sinon, s’il n’y a que des objets `Fan`, ou des objets liés à ventilateurs sans liquide → alors probablement air cooling.
+*Endpoint pour température d’inlet (châssis)* :  
+Même type de chemin, mais le `Name` ou `PhysicalContext` sera « Inlet » ou « Chassis Inlet Temp ».  
+Extrait d’une doc d’erreurs Dell :  
+> « The chassis inlet temperature is greater than the upper warning threshold temperature. » [2]
 
 ---
 
-Si tu veux, je peux *chercher et fournir un exemple complet d’API JSON extrait d’un vrai serveur Dell PowerEdge avec refroidissement liquide* (modèle, endpoint, champs).
+✅ Pour HPE OneView / iLO / Redfish  
+*Endpoint pour température ambiante / inlet* :  
+```
+GET /rest/server-hardware/{id}/utilization?fields=AmbientTemperature
+```  [3]Si vous voulez, je peux *chercher un exemple complet JSON*, avec plusieurs sondes (CPU1, CPU2, Inlet, Outlet) pour un modèle spécifique Dell (p.ex. PowerEdge) et vous l’envoyer — vous pourrez ainsi tester directement vos conditions. Citations:
+1. Domoticz Forum: forum.domoticz.com/viewtopic.php?t=32150&utm_source=chatgpt.com
+2. Dell: www.dell.com/support/manuals/en-us/idrac9-lifecycle-controller-v7.x-series/error_event_message_guide/tmptemperature-event-messages?guid=guid-2486fe84-6caa-4a51-84ef-17da36906861&utm_source=chatgpt.com
+3. HPE Developer: developer.hpe.com/blog/how-to-monitor-hpe-oneview-infrastructure-with-grafana-metrics-dashboards-and-influxdb/?utm_source=chatgpt.com
+4. HPE Community: community.hpe.com/t5/hpe-oneview/rest-api-retrieve-ilo-thermal-data/td-p/7177969?utm_source=chatgpt.com
+
+---
