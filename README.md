@@ -1,119 +1,96 @@
 ## Hi there 👋
 
-<!--
-**Tining-ramsses/Tining-ramsses** is a ✨ _special_ ✨ repository because its `README.md` (this file) appears on your GitHub profile.
+Là, avec les éléments que tu as partagés, on comprend beaucoup mieux le problème. Tu n’as pas besoin de remplacer le FQDD du contrôleur : tu dois faire une correspondance entre le FQDD utilisé par idrac_system_info et les métadonnées du contrôleur récupérées directement via Redfish.
 
-Here are some ideas to get you started:
-https://docs.ansible.com/projects/ansible/latest/collections/community/general/redfish_info_module.html
-https://github.com/dell/dellemc-openmanage-ansible-modules/blob/collections/roles/idrac_gather_facts/README.md?utm_source
-https://www.dell.com/support/manuals/fr-fr/idrac9-lifecycle-controller-v5.x-series/idrac9_5.00.00.00_lcug/easy-to-use-system-component-names?guid=guid-08245f06-442b-4bb6-9095-5fe841062c71&lang=en-us&utm_source
-- name: Récupérer les modèles des contrôleurs via Redfish
-  community.general.redfish_info:
-    category: Systems
-    command: GetStorageControllerInventory
-    baseuri: "https://{{ idrac_ip }}"
-    username: "{{ idrac_username }}"
+Dans ton exemple :
+
+Champ	Valeur	Signification
+Controller	AHCI.Slot.7-1	Identifiant technique (FQDD)
+Name	BOSS-S1	Nom du contrôleur
+Model	BOSS-S1	Modèle du contrôleur
+PhysicalDisk.Model	SSDSCKKB240G8R	Modèle du disque Intel, pas celui du contrôleur
+
+Le principe est donc de conserver AHCI.Slot.7-1 pour identifier le contrôleur, puis d’obtenir BOSS-S1 à partir de sa ressource Redfish. Il faut éviter de chercher Model directement dans le dictionnaire storage_status.Controller, puisque, d’après ta sortie, celui-ci contient une structure d’inventaire différente.
+
+1. Playbook de correction
+
+Je te propose d’abord de tester cette méthode en lecture seule. Elle interroge la collection Storage, puis chaque ressource référencée par @odata.id. C’est cohérent avec Redfish et avec les commandes d’inventaire documentées par Ansible.
+
+Adapte les variables d’authentification à celles que tu utilises déjà.
+
+- name: Lire la collection Storage Redfish
+  ansible.builtin.uri:
+    url: "https://{{ idrac_ip }}/redfish/v1/Systems/System.Embedded.1/Storage/"
+    method: GET
+    user: "{{ idrac_username }}"
     password: "{{ idrac_password }}"
+    force_basic_auth: true
     validate_certs: false
-  register: storage_controller_inventory
+    return_content: true
+    status_code: 200
+  register: storage_collection
   no_log: true
-
-- name: Afficher le nom et le modèle du contrôleur
+- name: Vérifier les membres renvoyés par Redfish
+  ansible.builtin.debug:
+    msg: "{{ storage_collection.json }}"
+  when: storage_collection.json.Members is defined
+- name: Lire chaque ressource Storage
+  ansible.builtin.uri:
+    url: "https://{{ idrac_ip }}{{ item['@odata.id'] }}"
+    method: GET
+    user: "{{ idrac_username }}"
+    password: "{{ idrac_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    return_content: true
+    status_code: 200
+  loop: "{{ storage_collection.json.Members | default([]) }}"
+  loop_control:
+    label: "{{ item['@odata.id'] | default('URI absente') }}"
+  register: storage_details
+  no_log: true
+- name: Afficher les noms et modèles des contrôleurs
   ansible.builtin.debug:
     msg:
-      Controller: >-
-        {{ item.Model
-           | default(item.Name | default('Modèle inconnu', true), true) }}
-  loop: "{{ storage_controller_inventory.redfish_facts.storage_controller.entries }}"
-  loop_control:
-    label: >-
-      {{ item.Model
-         | default(item.Name | default(item.Id, true), true) }}
+      Id: "{{ item.json.Id | default('Non fourni') }}"
+      Name: "{{ item.json.Name | default('Non fourni') }}"
+      Model: >-
+        {{ item.json.Model
+           | default(
+               (item.json.StorageControllers | default([{}]) | first).Model
+               | default('Non fourni', true),
+               true
+             )
+        }}
+      Manufacturer: >-
+        {{ item.json.Manufacturer
+           | default(
+               (item.json.StorageControllers | default([{}]) | first).Manufacturer
+               | default('Non fourni', true),
+               true
+             )
+        }}
+  loop: "{{ storage_details.results | default([]) }}"
+  when:
+    - item.json is defined
 
+2. Ce que tu dois vérifier dans le résultat
 
-- 🔭 I’m currently working on ...
-- 🌱 I’m currently learning ...
-- 👯 I’m looking to collaborate on ...
-- 🤔 I’m looking for help with ...
-- 💬 Ask me about ...
-- 📫 How to reach me: ...
-- 😄 Pronouns: ...
-- ⚡ Fun fact: .g..
--->
-J’ai trouvé ce qu’il te faut dans la documentation officielle d’Ansible, le schéma Redfish et un exemple publié par Dell. La clé est de récupérer la propriété Model du contrôleur de stockage, au lieu d’utiliser son Id.
+Pour le contrôleur de ta capture, tu veux obtenir quelque chose comme :
 
-Sur ta capture, on voit notamment :
+Id: AHCI.Slot.7-1
+Name: BOSS-S1
+Model: BOSS-S1
+Manufacturer: Dell Inc.
 
-* Controller: BOSS-S1 : le nom du contrôleur associé.
-* Id: AHCI.Slot.7-1 : un identifiant technique, pas le modèle commercial.
-* Manufacturer: INTEL et Model: SSDSC... : ces informations correspondent au SSD affiché, pas nécessairement au contrôleur.
+C’est un résultat attendu d’après tes données, pas un résultat que j’ai pu tester sur ton iDRAC. Le modèle peut se trouver directement dans item.json.Model ou dans item.json.StorageControllers[0].Model, selon la structure réellement renvoyée.
 
-Dell publie d’ailleurs un exemple Redfish réel dans lequel le contrôleur a Id: AHCI.Integrated.1-1, mais Model: BOSS-S1 et Name: BOSS-S1.
+Si le premier debug ne montre pas de Members, ne poursuis pas en supposant que la collection est correcte : regarde la réponse complète et le code HTTP. Certains firmwares peuvent exposer une structure différente.
 
-1. La solution dans ton playbook Ansible
+3. Liens techniques vérifiés
 
-Utilise la commande GetStorageControllerInventory du module community.general.redfish_info, conçue précisément pour récupérer l’inventaire des contrôleurs de stockage. Le résultat est accessible avec redfish_facts.storage_controller.entries.
+* Ansible ⁠￼redfish_info⁠￼ — inventaire des contrôleurs de stockage⁠￼ : la commande GetStorageControllerInventory existe officiellement.
+* Schéma officiel Redfish DMTF⁠￼ : référence des ressources et propriétés de stockage.
+* Exemple d’inventaire Redfish sur GitHub⁠￼ : exemple de contrôleurs, disques et volumes dans les ressources Storage. C’est un projet tiers, pas une documentation officielle Dell.
 
-- name: Récupérer les modèles des contrôleurs via Redfish
-  community.general.redfish_info:
-    category: Systems
-    command: GetStorageControllerInventory
-    baseuri: "https://{{ idrac_ip }}"
-    username: "{{ idrac_username }}"
-    password: "{{ idrac_password }}"
-    validate_certs: false
-  register: storage_controller_inventory
-  no_log: true
-- name: Afficher le nom et le modèle du contrôleur
-  ansible.builtin.debug:
-    msg:
-      Controller: >-
-        {{ item.Model
-           | default(item.Name | default('Modèle inconnu', true), true) }}
-  loop: "{{ storage_controller_inventory.redfish_facts.storage_controller.entries }}"
-  loop_control:
-    label: >-
-      {{ item.Model
-         | default(item.Name | default(item.Id, true), true) }}
-
-Remplace idrac_ip, idrac_username et idrac_password par les variables de ton playbook. validate_certs: false est adapté uniquement si tu dois contourner le certificat non reconnu de l’iDRAC ; privilégie la validation du certificat lorsqu’elle est possible.
-
-Si la collection n’est pas installée :
-
-ansible-galaxy collection install community.general
-
-2. Où vérifier que ça fonctionne réellement ?
-
-Voici les liens directs que j’ai trouvés :
-
-Documentation officielle Ansible
-
-Description de redfish_info, commandes disponibles et exemples de récupération des propriétés.
-
-Consulter la documentation Ansible⁠￼
-
-Exemple concret fourni par Dell
-
-L’inventaire d’un contrôleur BOSS-S1 comprend bien les champs Id, Model, Name et Manufacturer.
-
-Voir l’exemple Redfish Dell sur GitHub⁠￼
-
-Documentation officielle Dell sur les identifiants FQDD
-
-Explique les identifiants techniques des composants et leurs noms plus lisibles.
-
-Voir le guide Dell⁠￼
-
-Schéma officiel Redfish DMTF
-
-Définit les propriétés Model et Name de la ressource StorageController.
-
-Consulter le schéma Redfish⁠￼
-
-3. Attention à un détail important dans ton cas
-
-Si ton playbook récupère actuellement les disques avec GetDiskInventory, ne remplace pas simplement le champ Id par Model dans cette même liste : tu risques d’afficher le modèle du SSD Intel au lieu de celui du contrôleur BOSS-S1.
-
-Il faut récupérer l’inventaire des contrôleurs séparément, comme dans le playbook ci-dessus. Si tu veux ensuite afficher le modèle du contrôleur sur chaque ligne de disque, il faudra relier les entrées des deux inventaires à partir des références réellement renvoyées par ton iDRAC.
-
-Envoie-moi le bloc de ton playbook qui récupère et affiche actuellement Controller, Id, Description, Manufacturer et Model. Je pourrai te montrer précisément quelle partie modifier sans chambouler le reste de ton automatisation.
+Mon conseil : lance d’abord les trois premières tâches et regarde le JSON retourné pour AHCI.Slot.7-1. Si tu me transmets ce JSON (en masquant les informations sensibles), je pourrai adapter précisément la correspondance avec tes champs PhysicalDisk et VirtualDisk, sans inventer la structure de ton firmware.
