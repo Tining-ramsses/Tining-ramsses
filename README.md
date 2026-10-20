@@ -4,6 +4,32 @@
 **Tining-ramsses/Tining-ramsses** is a ✨ _special_ ✨ repository because its `README.md` (this file) appears on your GitHub profile.
 
 Here are some ideas to get you started:
+https://docs.ansible.com/projects/ansible/latest/collections/community/general/redfish_info_module.html
+https://github.com/dell/dellemc-openmanage-ansible-modules/blob/collections/roles/idrac_gather_facts/README.md?utm_source
+https://www.dell.com/support/manuals/fr-fr/idrac9-lifecycle-controller-v5.x-series/idrac9_5.00.00.00_lcug/easy-to-use-system-component-names?guid=guid-08245f06-442b-4bb6-9095-5fe841062c71&lang=en-us&utm_source
+- name: Récupérer les modèles des contrôleurs via Redfish
+  community.general.redfish_info:
+    category: Systems
+    command: GetStorageControllerInventory
+    baseuri: "https://{{ idrac_ip }}"
+    username: "{{ idrac_username }}"
+    password: "{{ idrac_password }}"
+    validate_certs: false
+  register: storage_controller_inventory
+  no_log: true
+
+- name: Afficher le nom et le modèle du contrôleur
+  ansible.builtin.debug:
+    msg:
+      Controller: >-
+        {{ item.Model
+           | default(item.Name | default('Modèle inconnu', true), true) }}
+  loop: "{{ storage_controller_inventory.redfish_facts.storage_controller.entries }}"
+  loop_control:
+    label: >-
+      {{ item.Model
+         | default(item.Name | default(item.Id, true), true) }}
+
 
 - 🔭 I’m currently working on ...
 - 🌱 I’m currently learning ...
